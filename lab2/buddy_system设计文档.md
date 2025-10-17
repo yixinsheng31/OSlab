@@ -555,7 +555,10 @@ MEM_BEGIN是定义初始块时base的首地址，它的作用和赋值将在后�
 
         #endif /* ! __KERN_MM_DEFAULT_PMM_H__ */
 
-- 在pmm.c文件中修改对应语句为
+
+- 在pmm.c文件中增加
+        #include <buddy_system_pmm.h>
+且修改对应语句为
 
         pmm_manager = &buddy_system_pmm_manager;
 
