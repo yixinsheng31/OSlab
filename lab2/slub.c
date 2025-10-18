@@ -2,7 +2,6 @@
 #include <defs.h>
 #include <pmm.h>
 #include <memlayout.h>
-#include <list.h>
 #include <string.h>
 #include "stdio.h"
 
@@ -29,7 +28,6 @@ typedef struct obj_head {
 typedef struct kmem_cache {
     size_t size;           /* object size */
     obj_head_t *freelist;  /* free objects */
-    list_entry_t slabs;    /* list of slabs (not fully used in this demo) */
 } kmem_cache_t;
 
 static kmem_cache_t kmem_caches[SLUB_NR_SIZES];
@@ -50,7 +48,6 @@ void slub_init(void) {
     for (int i = 0; i < SLUB_NR_SIZES; i++) {
         kmem_caches[i].size = SLUB_MIN_SIZE << i;
         kmem_caches[i].freelist = NULL;
-        list_init(&kmem_caches[i].slabs);
     }
     /* clear owner map */
     memset(page_owner_map, 0, sizeof(page_owner_map));
@@ -112,9 +109,10 @@ void *kmalloc(size_t size) {
 void kfree(void *ptr) {
     if (!ptr) return;
     uintptr_t pa = (uintptr_t)ptr - va_pa_offset;
-    /* validate pa in range */
-    if (pa >= KMEMSIZE) {
-        /* probably kernel pointer outside managed region; ignore */
+    /* validate pa by checking physical page number falls within managed pages */
+    size_t _ppn = PPN(pa);
+    if (_ppn < nbase || _ppn >= npage) {
+        /* pointer outside managed physical pages; ignore */
         return;
     }
     struct Page *pg = pa2page(pa);
@@ -131,7 +129,36 @@ void kfree(void *ptr) {
     o->next = kmem_caches[idx].freelist;
     kmem_caches[idx].freelist = o;
     /* increment freecount for owning page */
-    if (page_index >= 0) page_freecount[page_index]++;
+    if (page_index >= 0) {
+        page_freecount[page_index]++;
+        /* If the whole page becomes free, remove its objects from the freelist and
+         * return the page to the page allocator. This prevents stale page_owner_map
+         * entries and makes slub_self_test's final checks consistent.
+         */
+        size_t objsz = kmem_caches[idx].size;
+        unsigned short expected = (unsigned short)(PGSIZE / objsz);
+        if (page_freecount[page_index] == expected) {
+            /* remove objects that belong to this page from the cache freelist */
+            obj_head_t *new_head = NULL;
+            obj_head_t *cur = kmem_caches[idx].freelist;
+            while (cur) {
+                obj_head_t *next = cur->next;
+                if (cur->owner_page == (unsigned short)(page_index + 1)) {
+                    /* skip objects from this page */
+                } else {
+                    cur->next = new_head;
+                    new_head = cur;
+                }
+                cur = next;
+            }
+            kmem_caches[idx].freelist = new_head;
+            /* clear owner map and free the page */
+            page_owner_map[page_index] = 0;
+            page_freecount[page_index] = 0;
+            free_page(pg);
+            return;
+        }
+    }
 }
 
 /* Stronger self-test: allocate many objects across size-classes and free them */
@@ -164,30 +191,39 @@ void slub_self_test(void) {
             cprintf("class %d size %u allocated %d\n", i, (unsigned int)kmem_caches[i].size, per_class_alloc[i]);
     }
 
-    /* sanity checks */
-    for (size_t pi = 0; pi < KMEMSIZE / PGSIZE; pi++) {
-        if (page_owner_map[pi]) {
-            unsigned short fc = page_freecount[pi];
-            if (fc > (PGSIZE / SLUB_MIN_SIZE)) {
-                    cprintf("slub_self_test: page %u freecount %u too large\n", (unsigned int)pi, (unsigned int)fc);
-            }
-        }
+    /* sanity checks: record which pages are owned before freeing */
+    size_t total_pages = KMEMSIZE / PGSIZE;
+    uint8_t *was_owner = (uint8_t *)kmalloc(total_pages * sizeof(uint8_t));
+    if (!was_owner) {
+        cprintf("slub_self_test: cannot allocate was_owner buffer\n");
+        return;
     }
+    for (size_t pi = 0; pi < total_pages; pi++) was_owner[pi] = page_owner_map[pi] ? 1 : 0;
 
     for (int i = N - 1; i >= 0; i--) if (ptrs[i]) kfree(ptrs[i]);
 
     int errors = 0;
-    for (size_t pi = 0; pi < KMEMSIZE / PGSIZE; pi++) {
-        if (page_owner_map[pi]) {
-            int idx = page_owner_map[pi] - 1;
-            size_t objsz = kmem_caches[idx].size;
-            unsigned short expected = (unsigned short)(PGSIZE / objsz);
-            if (page_freecount[pi] != expected) {
-                    cprintf("slub_self_test: page %u freecount %u expected %u\n", (unsigned int)pi, (unsigned int)page_freecount[pi], (unsigned int)expected);
-                errors++;
-            }
+    int reclaimed = 0;
+    for (size_t pi = 0; pi < total_pages; pi++) {
+        if (!was_owner[pi]) continue;
+        if (page_owner_map[pi] == 0) {
+            /* page got reclaimed by kfree */
+            reclaimed++;
+            continue;
+        }
+        int idx = page_owner_map[pi] - 1;
+        size_t objsz = kmem_caches[idx].size;
+        unsigned short expected = (unsigned short)(PGSIZE / objsz);
+        if (page_freecount[pi] != expected) {
+            cprintf("slub_self_test: page %u freecount %u expected %u\n", (unsigned int)pi, (unsigned int)page_freecount[pi], (unsigned int)expected);
+            errors++;
         }
     }
+
+    cprintf("slub_self_test: reclaimed_pages=%d errors=%d\n", reclaimed, errors);
     if (errors == 0) cprintf("slub_self_test completed OK\n");
     else cprintf("slub_self_test completed with %d errors\n", errors);
+
+    /* free temporary buffer */
+    kfree(was_owner);
 }
