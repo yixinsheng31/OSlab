@@ -11,6 +11,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#ifndef PROC_RUNNING
+#ifdef PROC_RUNNABLE
+#define PROC_RUNNING PROC_RUNNABLE
+#else
+#define PROC_RUNNING 1
+#endif
+#endif
 
 /* ------------- process/thread mechanism design&implementation -------------
 (an simplified Linux process/thread mechanism )
@@ -184,22 +191,41 @@ get_pid(void)
 
 // proc_run - make process "proc" running on cpu
 // NOTE: before call switch_to, should load  base addr of "proc"'s new PDT
+// ...existing code...
 void proc_run(struct proc_struct *proc)
 {
     if (proc != current)
     {
-        // LAB4:EXERCISE3 YOUR CODE
-        /*
-         * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
-         * MACROs or Functions:
-         *   local_intr_save():        Disable interrupts
-         *   local_intr_restore():     Enable Interrupts
-         *   lsatp():                   Modify the value of satp register
-         *   switch_to():              Context switching between two processes
-         */
+        bool intr_flag;
+        struct proc_struct *prev;
 
+        local_intr_save(intr_flag);
+
+        prev = current;
+        /* update bookkeeping for prev and new current */
+        if (prev->state == PROC_RUNNING)
+            prev->state = PROC_RUNNABLE;
+
+        current = proc;
+        proc->state = PROC_RUNNING;
+        proc->runs++;
+
+        /* clear the need_resched flag for the new current */
+        proc->need_resched = 0;
+
+        /* switch page table if necessary (load new PDT) */
+        if (proc->pgdir != prev->pgdir)
+        {
+            lsatp(proc->pgdir);
+        }
+
+        /* perform context switch: from prev to proc */
+        switch_to(&prev->context, &proc->context);
+
+        local_intr_restore(intr_flag);
     }
 }
+// ...existing code...
 
 // forkret -- the first kernel entry point of a new thread/process
 // NOTE: the addr of forkret is setted in copy_thread function
