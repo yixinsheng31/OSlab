@@ -104,7 +104,20 @@ alloc_proc(void)
          *       uint32_t flags;                             // Process flag
          *       char name[PROC_NAME_LEN + 1];               // Process name
          */
-        
+        //先把整个结构体清零,后面的context和name就不需要单独考虑了，
+        memset(proc, 0, sizeof(struct proc_struct));
+
+        //再显式设置必须的初值 
+        proc->state         = PROC_UNINIT;   
+        proc->pid           = -1;            
+        proc->runs          = 0;
+        proc->kstack        = 0;
+        proc->need_resched  = 0;
+        proc->parent        = NULL;
+        proc->mm            = NULL;
+        proc->tf            = NULL;
+        proc->pgdir         = 0;
+        proc->flags         = 0;
     }
     return proc;
 }
