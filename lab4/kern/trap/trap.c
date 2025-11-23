@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <trap.h>
 #include <vmm.h>
+#include <sbi.h>
 
 #define TICK_NUM 100
 
@@ -20,6 +21,8 @@ static void print_ticks()
     panic("EOT: kernel seems ok.");
 #endif
 }
+
+static int print_count = 0;
 
 /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S
  */

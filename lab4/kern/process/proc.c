@@ -95,7 +95,7 @@ alloc_proc(void)
     struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
     if (proc != NULL)
     {
-        // LAB4:EXERCISE1 YOUR CODE
+        // LAB4:EXERCISE1 YOUR CODE 2312129
         /*
          * below fields in proc_struct need to be initialized
          *       enum proc_state state;                      // Process state
@@ -111,6 +111,7 @@ alloc_proc(void)
          *       uint32_t flags;                             // Process flag
          *       char name[PROC_NAME_LEN + 1];               // Process name
          */
+
         //先把整个结构体清零,后面的context和name就不需要单独考虑了，
         memset(proc, 0, sizeof(struct proc_struct));
 
@@ -123,7 +124,7 @@ alloc_proc(void)
         proc->parent        = NULL;
         proc->mm            = NULL;
         proc->tf            = NULL;
-        proc->pgdir         = 0;
+        proc->pgdir         = boot_pgdir_pa;  // 设置为 boot_pgdir_pa 而非 0
         proc->flags         = 0;
     }
     return proc;
@@ -191,11 +192,20 @@ get_pid(void)
 
 // proc_run - make process "proc" running on cpu
 // NOTE: before call switch_to, should load  base addr of "proc"'s new PDT
-// ...existing code...
+
 void proc_run(struct proc_struct *proc)
 {
     if (proc != current)
     {
+        // LAB4:EXERCISE3 YOUR CODE 2311321
+        /*
+         * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
+         * MACROs or Functions:
+         *   local_intr_save():        Disable interrupts
+         *   local_intr_restore():     Enable Interrupts
+         *   lsatp():                   Modify the value of satp register
+         *   switch_to():              Context switching between two processes
+         */
         bool intr_flag;
         struct proc_struct *prev;
 
@@ -225,7 +235,7 @@ void proc_run(struct proc_struct *proc)
         local_intr_restore(intr_flag);
     }
 }
-// ...existing code...
+
 
 // forkret -- the first kernel entry point of a new thread/process
 // NOTE: the addr of forkret is setted in copy_thread function
