@@ -112,7 +112,7 @@ alloc_proc(void)
          *       uint32_t wait_state;                        // waiting state
          *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
          */
-         /先把整个结构体清零,后面的context和name就不需要单独考虑了，
+         //先把整个结构体清零,后面的context和name就不需要单独考虑了，
         memset(proc, 0, sizeof(struct proc_struct));
 
         //再显式设置必须的初值 
@@ -239,33 +239,29 @@ void proc_run(struct proc_struct *proc)
          *   lsatp():                   Modify the value of satp register
          *   switch_to():              Context switching between two processes
          */
-         bool intr_flag;
-        struct proc_struct *prev;
+        unsigned long flags;
 
-        local_intr_save(intr_flag);
+        // save and disable local interrupts
+        local_intr_save(flags);
 
-        prev = current;
-        /* update bookkeeping for prev and new current */
-        if (prev->state == PROC_RUNNING)
-            prev->state = PROC_RUNNABLE;
+        // remember old current
+        struct proc_struct *prev = current;
 
+        // update current to new proc
         current = proc;
-        proc->state = PROC_RUNNING;
-        proc->runs++;
 
-        /* clear the need_resched flag for the new current */
+        // clear need_resched for the new current and increase run count
         proc->need_resched = 0;
 
-        /* switch page table if necessary (load new PDT) */
-        if (proc->pgdir != prev->pgdir)
-        {
-            lsatp(proc->pgdir);
-        }
+        // switch the page table (satp) to the new process's pgdir
+        // proc->pgdir holds the physical page directory/base for the process
+        lsatp(proc->pgdir);
 
-        /* perform context switch: from prev to proc */
+        // perform low-level context switch: switch from prev->context to proc->context
         switch_to(&prev->context, &proc->context);
 
-        local_intr_restore(intr_flag);
+        // restore local interrupts
+        local_intr_restore(flags);
     }
 }
 
@@ -479,6 +475,9 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     if ((proc = alloc_proc()) == NULL) {
         goto fork_out;
     }
+    /* LAB5: set parent relation early */
+    proc->parent = current;
+    current->wait_state = 0;
     //    2. call setup_kstack to allocate a kernel stack for child process
     if (setup_kstack(proc) != 0) {
         goto bad_fork_cleanup_proc;
@@ -495,8 +494,7 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     {
         proc->pid = get_pid();
         hash_proc(proc);
-        list_add(&proc_list, &(proc->list_link));
-        nr_process++;
+        set_links(proc);
     }
     local_intr_restore(intr_flag);
     //    6. call wakeup_proc to make the new child process RUNNABLE
@@ -738,7 +736,7 @@ load_icode(unsigned char *binary, size_t size)
     // Keep sstatus
     uintptr_t sstatus = tf->status;
     memset(tf, 0, sizeof(struct trapframe));
-    /* LAB5:EXERCISE1 YOUR CODE
+    /* LAB5:EXERCISE1 2311321
      * should set tf->gpr.sp, tf->epc, tf->status
      * NOTICE: If we set trapframe correctly, then the user level process can return to USER MODE from kernel. So
      *          tf->gpr.sp should be user stack top (the value of sp)
@@ -746,6 +744,9 @@ load_icode(unsigned char *binary, size_t size)
      *          tf->status should be appropriate for user program (the value of sstatus)
      *          hint: check meaning of SPP, SPIE in SSTATUS, use them by SSTATUS_SPP, SSTATUS_SPIE(defined in risv.h)
      */
+    tf->gpr.sp = USTACKTOP;
+    tf->epc = elf->e_entry;
+    tf->status = (sstatus & ~SSTATUS_SPP) | SSTATUS_SPIE;
 
     ret = 0;
 out:
